@@ -3,6 +3,7 @@ import pymongo
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime
+import re
 
 # MongoDB connection
 def get_mongo_client():
@@ -29,19 +30,34 @@ def generate_canonical_barcode():
     else:
         return 100001  # Starting point
 
+def extract_chain_id(file_name):
+    # Extracts the chain_id from the file_name
+    match = re.search(r'PriceFull(\d+)-', file_name)
+    if match:
+        return match.group(1)
+    else:
+        return None
+
 def search_products(search_term, selected_chains):
     query = {"item_name": {"$regex": search_term, "$options": "i"}}
-    if selected_chains:
-        chain_ids = [int(chain_id) for chain_id in selected_chains]
-        query["chain_id"] = {"$in": chain_ids}
     projection = {
         "_id": 0,
         "item_code": 1,
         "item_name": 1,
-        "chain_id": 1,
-        "manufacturer_name": 1
+        "manufacturer_name": 1,
+        "file_name": 1
     }
-    return list(products_collection.find(query, projection).limit(100))
+    products_cursor = products_collection.find(query, projection).limit(100)
+    products = []
+    for product in products_cursor:
+        file_name = product.get('file_name', '')
+        chain_id = extract_chain_id(file_name)
+        if chain_id:
+            product['chain_id'] = chain_id
+            products.append(product)
+    if selected_chains:
+        products = [p for p in products if p['chain_id'] in selected_chains]
+    return products
 
 def get_chain_names():
     chains = list(chains_collection.find({}, {"_id": 0, "id": 1, "chain_name": 1}))
@@ -126,7 +142,7 @@ def main():
         selected_items = [products[i] for i in selected_products]
         chain_barcodes = {}
         for item in selected_items:
-            chain_id = str(item["chain_id"])
+            chain_id = item["chain_id"]
             if chain_id in chain_names:
                 chain_name = chain_names[chain_id]
                 chain_barcodes[chain_name] = item["item_code"]
