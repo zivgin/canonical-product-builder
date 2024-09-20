@@ -40,7 +40,14 @@ def get_sub_chain_names():
         chain_id = str(sub_chain['chain_id'])
         sub_chain_id = str(sub_chain['id'])
         key = f"{chain_id}-{sub_chain_id}"
-        sub_chain_name = sub_chain.get('sub_chain_name', '')
+        sub_chain_name = sub_chain.get('sub_chain_name')
+
+        # Ensure sub_chain_name is a string
+        if sub_chain_name is None:
+            sub_chain_name = ''
+        else:
+            sub_chain_name = str(sub_chain_name)
+
         if sub_chain_name == '1' or not sub_chain_name.strip():
             sub_chain_name = chain_dict.get(chain_id, 'Unknown Chain')
         sub_chain_dict[key] = sub_chain_name
