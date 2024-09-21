@@ -87,6 +87,7 @@ def search_products(search_term, excluded_sub_chains, exclude_words=[]):
             sub_chain_key = f"{chain_id}-{sub_chain_id}"
             if sub_chain_key not in excluded_sub_chains:
                 product['sub_chain_id'] = sub_chain_key
+                product['chain_id'] = chain_id  # Add chain_id to product
                 products.append(product)
     return products
 
@@ -133,36 +134,42 @@ def main():
         # Upload Excel file
         uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
         if uploaded_file:
-            df_excel = pd.read_excel(uploaded_file)
-            if not df_excel.empty:
-                first_row = df_excel.iloc[0]
-                # Populate barcode
-                if 'Barcode' in df_excel.columns:
-                    barcode = first_row['Barcode']
-                    if pd.notnull(barcode):
-                        st.session_state["canonical_barcode"] = int(barcode)
-                # Populate name
-                if 'Name' in df_excel.columns:
-                    name = first_row['Name']
-                else:
-                    name = ''
-                # Populate category and sub-category
-                if 'Category' in df_excel.columns:
-                    category_data = first_row['Category']
-                    if pd.notnull(category_data):
-                        if '-' in category_data:
-                            category, sub_category = map(str.strip, category_data.split('-', 1))
+            try:
+                df_excel = pd.read_excel(uploaded_file)
+                if not df_excel.empty:
+                    first_row = df_excel.iloc[0]
+                    # Populate barcode
+                    if 'Barcode' in df_excel.columns:
+                        barcode = first_row['Barcode']
+                        if pd.notnull(barcode):
+                            st.session_state["canonical_barcode"] = int(barcode)
+                    # Populate name
+                    if 'Name' in df_excel.columns:
+                        name = first_row['Name']
+                    else:
+                        name = ''
+                    # Populate category and sub-category
+                    if 'Category' in df_excel.columns:
+                        category_data = first_row['Category']
+                        if pd.notnull(category_data):
+                            if '-' in category_data:
+                                category, sub_category = map(str.strip, category_data.split('-', 1))
+                            else:
+                                category = category_data.strip()
+                                sub_category = ''
                         else:
-                            category = category_data.strip()
+                            category = ''
                             sub_category = ''
                     else:
                         category = ''
                         sub_category = ''
                 else:
-                    category = ''
-                    sub_category = ''
-            else:
-                st.error("Uploaded Excel file is empty.")
+                    st.error("Uploaded Excel file is empty.")
+            except Exception as e:
+                st.error(f"Error reading Excel file: {e}")
+                name = ''
+                category = ''
+                sub_category = ''
         else:
             name = ''
             category = ''
@@ -181,11 +188,15 @@ def main():
         # Input name, category, and sub-category
         name = st.text_input("Product Name", value=name)
         categories = get_categories()
-        category = st.selectbox("Category", options=["Add new category"] + categories, index=0 if category == '' else categories.index(category)+1)
+        if category and category not in categories:
+            categories = [category] + list(categories)
+        category = st.selectbox("Category", options=["Add new category"] + categories)
         if category == "Add new category":
             category = st.text_input("New Category", value='')
         sub_categories = get_sub_categories()
-        sub_category = st.selectbox("Sub-Category", options=["Add new sub-category"] + sub_categories, index=0 if sub_category == '' else sub_categories.index(sub_category)+1)
+        if sub_category and sub_category not in sub_categories:
+            sub_categories = [sub_category] + list(sub_categories)
+        sub_category = st.selectbox("Sub-Category", options=["Add new sub-category"] + sub_categories)
         if sub_category == "Add new sub-category":
             sub_category = st.text_input("New Sub-Category", value='')
 
@@ -228,13 +239,14 @@ def main():
                 df_products["sub_chain_name"] = df_products["sub_chain_id"].apply(
                     lambda x: sub_chain_dict.get(x, chain_dict.get(x.split('-')[0], 'Unknown Chain'))
                 )
-                df_products = df_products[["item_code", "item_name", "sub_chain_name", "manufacturer_name"]]
+                df_products["chain_name"] = df_products["chain_id"].astype(str).map(chain_dict)
+                df_products = df_products[["item_code", "item_name", "chain_name", "sub_chain_name", "manufacturer_name"]]
                 df_products["item_display"] = df_products.apply(lambda x: f"{x['item_name']} ({x['item_code']})", axis=1)
                 st.write("Search Results:")
                 selected_index = st.selectbox(
                     "Select a product to assign",
                     options=df_products.index,
-                    format_func=lambda x: f"{df_products.loc[x, 'item_display']} - {df_products.loc[x, 'sub_chain_name']}"
+                    format_func=lambda x: f"{df_products.loc[x, 'item_display']} - {df_products.loc[x, 'chain_name']} - {df_products.loc[x, 'sub_chain_name']}"
                 )
                 # Update selection
                 item = products[selected_index]
