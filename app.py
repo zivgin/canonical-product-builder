@@ -63,8 +63,13 @@ def extract_chain_and_sub_chain_id(file_name):
     else:
         return None, None
 
-def search_products(search_term, excluded_sub_chains):
+def search_products(search_term, excluded_sub_chains, exclude_words=[]):
+    # Build regex pattern for exclude words
+    exclude_pattern = '|'.join([re.escape(word) for word in exclude_words])
+    # Query to search products
     query = {"item_name": {"$regex": search_term, "$options": "i"}}
+    if exclude_words:
+        query["item_name"]["$not"] = {"$regex": exclude_pattern, "$options": "i"}
     projection = {
         "_id": 0,
         "item_code": 1,
@@ -87,6 +92,10 @@ def search_products(search_term, excluded_sub_chains):
 def get_categories():
     categories = canonical_products_collection.distinct("category")
     return categories
+
+def get_sub_categories():
+    sub_categories = canonical_products_collection.distinct("sub_category")
+    return sub_categories
 
 def save_canonical_product(data):
     try:
@@ -111,6 +120,18 @@ def main():
         st.session_state['selected_items'] = {}
     if 'excluded_sub_chains' not in st.session_state:
         st.session_state['excluded_sub_chains'] = set()
+    if 'exclude_words' not in st.session_state:
+        st.session_state['exclude_words'] = []
+
+    # Section 0: View Existing Canonical Products
+    st.header("0. View Existing Canonical Products")
+    if st.checkbox("Show existing canonical products"):
+        canonical_products = list(canonical_products_collection.find({}, {"_id": 0}))
+        if canonical_products:
+            df_canonical = pd.DataFrame(canonical_products)
+            st.dataframe(df_canonical)
+        else:
+            st.write("No canonical products found.")
 
     # Section 1: Create Canonical Product
     st.header("1. Create Canonical Product")
@@ -122,47 +143,44 @@ def main():
     else:
         st.error("Canonical Barcode must be a number.")
 
-    # Input name and category
+    # Input name, category, and sub-category
     name = st.text_input("Product Name")
     categories = get_categories()
     category = st.selectbox("Category", options=["Add new category"] + categories)
     if category == "Add new category":
         category = st.text_input("New Category")
+    sub_categories = get_sub_categories()
+    sub_category = st.selectbox("Sub-Category", options=["Add new sub-category"] + sub_categories)
+    if sub_category == "Add new sub-category":
+        sub_category = st.text_input("New Sub-Category")
 
     # Section 2: Auto-Suggestion for Matching Products
     st.header("2. Auto-Suggestion for Matching Products")
     if name:
-        auto_products = search_products(name, st.session_state['excluded_sub_chains'])
+        auto_products = search_products(f"^{re.escape(name)}$", st.session_state['excluded_sub_chains'])
         if auto_products:
-            df_auto = pd.DataFrame(auto_products)
-            df_auto["sub_chain_name"] = df_auto["sub_chain_id"].apply(
-                lambda x: sub_chain_dict.get(x, chain_dict.get(x.split('-')[0], 'Unknown Chain'))
-            )
-            df_auto = df_auto[["item_code", "item_name", "sub_chain_name", "manufacturer_name"]]
-            df_auto["item_display"] = df_auto.apply(lambda x: f"{x['item_name']} ({x['item_code']})", axis=1)
-            st.write("Auto-Suggested Products:")
-            selected_auto_products = st.multiselect(
-                "Select products to assign from suggestions",
-                options=df_auto.index,
-                format_func=lambda x: f"{df_auto.loc[x, 'item_display']} - {df_auto.loc[x, 'sub_chain_name']}"
-            )
-            # Update selections
-            for idx in selected_auto_products:
-                item = auto_products[idx]
-                sub_chain_id = item['sub_chain_id']
-                if sub_chain_id not in st.session_state['selected_sub_chains']:
-                    st.session_state['selected_sub_chains'].add(sub_chain_id)
-                    st.session_state['excluded_sub_chains'].add(sub_chain_id)
-                    st.session_state['selected_items'][sub_chain_id] = item
+            exact_matches = {}
+            for product in auto_products:
+                sub_chain_id = product['sub_chain_id']
+                st.session_state['selected_sub_chains'].add(sub_chain_id)
+                st.session_state['excluded_sub_chains'].add(sub_chain_id)
+                st.session_state['selected_items'][sub_chain_id] = product
+                exact_matches[sub_chain_id] = product
+            if exact_matches:
+                st.write("Automatically assigned exact matches from other sub-chains.")
         else:
-            st.write("No auto-suggestions available.")
+            st.write("No exact matches found for auto-assignment.")
 
     # Section 3: Search for Products
     st.header("3. Search for Products")
 
     search_term = st.text_input("Search for products", value=name)
+    exclude_words_input = st.text_input("Exclude words from search (separate by commas)")
+    exclude_words = [word.strip() for word in exclude_words_input.split(',')] if exclude_words_input else []
+    st.session_state['exclude_words'] = exclude_words
+
     if search_term:
-        products = search_products(search_term, st.session_state['excluded_sub_chains'])
+        products = search_products(search_term, st.session_state['excluded_sub_chains'], st.session_state['exclude_words'])
         if products:
             df_products = pd.DataFrame(products)
             df_products["sub_chain_name"] = df_products["sub_chain_id"].apply(
@@ -171,19 +189,21 @@ def main():
             df_products = df_products[["item_code", "item_name", "sub_chain_name", "manufacturer_name"]]
             df_products["item_display"] = df_products.apply(lambda x: f"{x['item_name']} ({x['item_code']})", axis=1)
             st.write("Search Results:")
-            selected_products = st.multiselect(
-                "Select products to assign",
+            selected_index = st.selectbox(
+                "Select a product to assign",
                 options=df_products.index,
                 format_func=lambda x: f"{df_products.loc[x, 'item_display']} - {df_products.loc[x, 'sub_chain_name']}"
             )
-            # Update selections
-            for idx in selected_products:
-                item = products[idx]
-                sub_chain_id = item['sub_chain_id']
-                if sub_chain_id not in st.session_state['selected_sub_chains']:
-                    st.session_state['selected_sub_chains'].add(sub_chain_id)
-                    st.session_state['excluded_sub_chains'].add(sub_chain_id)
-                    st.session_state['selected_items'][sub_chain_id] = item
+            # Update selection
+            item = products[selected_index]
+            sub_chain_id = item['sub_chain_id']
+            if sub_chain_id in st.session_state['selected_sub_chains']:
+                st.warning(f"You have already selected a product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')}.")
+            else:
+                st.session_state['selected_sub_chains'].add(sub_chain_id)
+                st.session_state['excluded_sub_chains'].add(sub_chain_id)
+                st.session_state['selected_items'][sub_chain_id] = item
+                st.success(f"Product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')} added.")
         else:
             st.write("No products found.")
     else:
@@ -217,9 +237,9 @@ def main():
         # Copy buttons
         col3, col4 = st.columns(2)
         with col3:
-            st.button(f"Copy Name ({sub_chain_name})", key=f"copy_name_{sub_chain_id}", on_click=lambda txt=name_input: st.write(f"Copied: {txt}"))
+            st.write(f"Name: {name_input}")
         with col4:
-            st.button(f"Copy Barcode ({sub_chain_name})", key=f"copy_barcode_{sub_chain_id}", on_click=lambda txt=barcode_input: st.write(f"Copied: {txt}"))
+            st.write(f"Barcode: {barcode_input}")
 
     # Section 6: Category Selection
     st.header("5. Category Selection")
@@ -237,6 +257,7 @@ def main():
                 "canonical_barcode": st.session_state["canonical_barcode"],
                 "name": name,
                 "category": category,
+                "sub_category": sub_category,
                 "chains": chain_barcodes,
                 "created_at": created_at
             }
