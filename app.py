@@ -40,15 +40,9 @@ def get_sub_chain_names():
         chain_id = str(sub_chain['chain_id'])
         sub_chain_id = str(sub_chain['id'])
         key = f"{chain_id}-{sub_chain_id}"
-        sub_chain_name = sub_chain.get('sub_chain_name')
-
-        # Ensure sub_chain_name is a string
-        if sub_chain_name is None:
-            sub_chain_name = ''
-        else:
-            sub_chain_name = str(sub_chain_name)
-
-        if sub_chain_name == '1' or not sub_chain_name.strip():
+        sub_chain_name = sub_chain.get('sub_chain_name', '')
+        sub_chain_name = str(sub_chain_name or '').strip()
+        if sub_chain_name == '1' or not sub_chain_name:
             sub_chain_name = chain_dict.get(chain_id, 'Unknown Chain')
         sub_chain_dict[key] = sub_chain_name
     return sub_chain_dict
@@ -61,11 +55,10 @@ def generate_canonical_barcode():
         return 100001  # Starting point
 
 def extract_chain_and_sub_chain_id(file_name):
-    # Extracts the chain_id and sub_chain_id from the file_name
     match = re.search(r'PriceFull(\d+)-(\d+)-', file_name)
     if match:
         chain_id = match.group(1)
-        sub_chain_id = match.group(2)
+        sub_chain_id = match.group(2).lstrip('0') or '0'  # Remove leading zeros
         return chain_id, sub_chain_id
     else:
         return None, None
