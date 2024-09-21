@@ -180,23 +180,29 @@ def main():
 
         # Input name, category, and sub-category
         if not st.session_state['uploaded_products'].empty:
-            product_names = st.session_state['uploaded_products']['Name'].tolist()
-            selected_product_name = st.selectbox("Select Product", options=product_names)
-            selected_product = st.session_state['uploaded_products'][st.session_state['uploaded_products']['Name'] == selected_product_name].iloc[0]
-            name = selected_product_name
-            # Update canonical barcode if available
-            if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
-                st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
-                barcode_input = str(st.session_state["canonical_barcode"])
-            # Update category and sub-category if available
-            if 'Category' in selected_product and pd.notnull(selected_product['Category']):
-                category_data = selected_product['Category']
-                if '-' in category_data:
-                    category, sub_category = map(str.strip, category_data.split('-', 1))
+            if 'Name' in st.session_state['uploaded_products'].columns:
+                product_names = st.session_state['uploaded_products']['Name'].dropna().unique().tolist()
+                selected_product_name = st.selectbox("Select Product", options=product_names)
+                selected_product = st.session_state['uploaded_products'][st.session_state['uploaded_products']['Name'] == selected_product_name].iloc[0]
+                name = selected_product_name
+                # Update canonical barcode if available
+                if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
+                    st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
+                    barcode_input = str(st.session_state["canonical_barcode"])
+                # Update category and sub-category if available
+                if 'Category' in selected_product and pd.notnull(selected_product['Category']):
+                    category_data = selected_product['Category']
+                    if '-' in category_data:
+                        category, sub_category = map(str.strip, category_data.split('-', 1))
+                    else:
+                        category = category_data.strip()
+                        sub_category = ''
                 else:
-                    category = category_data.strip()
+                    category = ''
                     sub_category = ''
             else:
+                st.error("The uploaded Excel file must contain a 'Name' column.")
+                name = st.text_input("Product Name", value='')
                 category = ''
                 sub_category = ''
         else:
