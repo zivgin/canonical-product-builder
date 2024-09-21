@@ -4,6 +4,12 @@ import pandas as pd
 from datetime import datetime
 import re
 
+# Try importing openpyxl, if not installed, show error message
+try:
+    import openpyxl
+except ImportError:
+    st.error("Missing optional dependency 'openpyxl'. Please install openpyxl via 'pip install openpyxl'.")
+
 # MongoDB connection
 def get_mongo_client():
     MONGO_USERNAME = st.secrets["mongo"]["MONGO_USERNAME"]
@@ -122,8 +128,6 @@ def main():
         st.session_state['selected_items'] = {}
     if 'excluded_sub_chains' not in st.session_state:
         st.session_state['excluded_sub_chains'] = set()
-    if 'exclude_words' not in st.session_state:
-        st.session_state['exclude_words'] = []
     if 'exclude_words_list' not in st.session_state:
         st.session_state['exclude_words_list'] = []
 
@@ -165,6 +169,9 @@ def main():
                         sub_category = ''
                 else:
                     st.error("Uploaded Excel file is empty.")
+                    name = ''
+                    category = ''
+                    sub_category = ''
             except Exception as e:
                 st.error(f"Error reading Excel file: {e}")
                 name = ''
@@ -221,10 +228,12 @@ def main():
         st.header("3. Search for Products")
 
         search_term = st.text_input("Search for products", value=name)
-        exclude_words_input = st.text_input("Exclude words from search (type word and press Enter)")
+        exclude_words_input = st.text_input("Exclude words from search (separate by commas)")
         if exclude_words_input:
-            st.session_state['exclude_words_list'].append(exclude_words_input.strip())
-        st.session_state['exclude_words_list'] = list(set(st.session_state['exclude_words_list']))
+            words = [word.strip() for word in exclude_words_input.split(',') if word.strip()]
+            st.session_state['exclude_words_list'].extend(words)
+            # Remove duplicates
+            st.session_state['exclude_words_list'] = list(set(st.session_state['exclude_words_list']))
         exclude_words = st.session_state['exclude_words_list']
         if exclude_words:
             st.write("Excluding words:", exclude_words)
@@ -284,6 +293,19 @@ def main():
             st.session_state['excluded_sub_chains'].remove(sub_chain_id)
             del st.session_state['selected_items'][sub_chain_id]
             st.success(f"Removed selection from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')}")
+
+        # Sub-Chains Status in Sidebar
+        st.sidebar.header("Sub-Chains Status")
+        all_sub_chains = set(sub_chain_dict.keys())
+        remaining_sub_chains = all_sub_chains - st.session_state['selected_sub_chains']
+        st.sidebar.write("Sub-Chains without selected products:")
+        for sub_chain_id in sorted(remaining_sub_chains):
+            sub_chain_name = sub_chain_dict.get(sub_chain_id, chain_dict.get(sub_chain_id.split('-')[0], 'Unknown Chain'))
+            st.sidebar.markdown(f"<span style='color:red'>❌ {sub_chain_name}</span>", unsafe_allow_html=True)
+        st.sidebar.write("Sub-Chains with selected products:")
+        for sub_chain_id in sorted(st.session_state['selected_sub_chains']):
+            sub_chain_name = sub_chain_dict.get(sub_chain_id, chain_dict.get(sub_chain_id.split('-')[0], 'Unknown Chain'))
+            st.sidebar.markdown(f"<span style='color:green'>✔️ {sub_chain_name}</span>", unsafe_allow_html=True)
 
         # Section 5: Preview and Save
         st.header("5. Preview and Save")
