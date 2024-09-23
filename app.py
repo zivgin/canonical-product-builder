@@ -3,6 +3,8 @@ import pymongo
 import pandas as pd
 from datetime import datetime
 import re
+import requests
+from io import BytesIO
 
 # Try importing openpyxl, if not installed, show error message
 try:
@@ -156,26 +158,43 @@ def main():
         st.session_state['category'] = ''
     if 'sub_category' not in st.session_state:
         st.session_state['sub_category'] = ''
+    if 'name' not in st.session_state:
+        st.session_state['name'] = ''
 
     # Tabs
     tab1, tab2 = st.tabs(["Build Canonical Product", "View Canonical Products"])
 
     with tab1:
-        # Upload Excel file
-        uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
-        if uploaded_file:
-            try:
-                df_excel = pd.read_excel(uploaded_file)
-                if not df_excel.empty:
-                    # Store the DataFrame in session state
-                    st.session_state['uploaded_products'] = df_excel
-                    # Reset selected product name when new Excel file is uploaded
-                    st.session_state['selected_product_name'] = None
-                else:
-                    st.error("Uploaded Excel file is empty.")
+        # Input Google Sheets link
+        google_sheets_link = st.text_input("Enter Google Sheets URL")
+        if google_sheets_link:
+            # Extract the file ID
+            match = re.search(r'/d/([a-zA-Z0-9-_]+)', google_sheets_link)
+            if match:
+                file_id = match.group(1)
+                export_link = f'https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx'
+
+                try:
+                    response = requests.get(export_link)
+                    if response.status_code == 200:
+                        df_excel = pd.read_excel(BytesIO(response.content))
+                        if not df_excel.empty:
+                            # Store the DataFrame in session state
+                            st.session_state['uploaded_products'] = df_excel
+                            # Reset selected product name when new file is uploaded
+                            st.session_state['selected_product_name'] = None
+                            st.success("Excel file loaded successfully.")
+                        else:
+                            st.error("The Google Sheet is empty.")
+                            st.session_state['uploaded_products'] = pd.DataFrame()
+                    else:
+                        st.error("Failed to download the Google Sheet. Please check the link and try again.")
+                        st.session_state['uploaded_products'] = pd.DataFrame()
+                except Exception as e:
+                    st.error(f"Error reading Excel file: {e}")
                     st.session_state['uploaded_products'] = pd.DataFrame()
-            except Exception as e:
-                st.error(f"Error reading Excel file: {e}")
+            else:
+                st.error("Invalid Google Sheets URL. Please ensure it follows the format: https://docs.google.com/spreadsheets/d/FILE_ID/edit")
                 st.session_state['uploaded_products'] = pd.DataFrame()
         else:
             st.session_state['uploaded_products'] = pd.DataFrame()
@@ -200,6 +219,7 @@ def main():
 
                     selected_product = st.session_state['uploaded_products'][st.session_state['uploaded_products']['Name'] == selected_product_name].iloc[0]
                     name = selected_product_name
+                    st.session_state['name'] = name
                     # Update canonical barcode if available
                     if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
                         st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
@@ -219,14 +239,12 @@ def main():
                     # Store category and sub-category in session state
                     st.session_state['category'] = category
                     st.session_state['sub_category'] = sub_category
-                    # Store product name in session state
-                    st.session_state['name'] = name
                 else:
                     name = st.session_state.get('name', '')
                     category = st.session_state.get('category', '')
                     sub_category = st.session_state.get('sub_category', '')
             else:
-                st.error("The uploaded Excel file must contain a 'Name' column.")
+                st.error("The uploaded file must contain a 'Name' column.")
                 name = st.text_input("Product Name", value='', key='product_name_input')
                 category = ''
                 sub_category = ''
@@ -313,24 +331,26 @@ def main():
                     lambda x: sub_chain_dict.get(x, chain_dict.get(x.split('-')[0], 'Unknown Chain'))
                 )
                 df_products["chain_name"] = df_products["chain_id"].astype(str).map(chain_dict)
-                df_products = df_products[["item_code", "item_name", "chain_name", "sub_chain_name", "manufacturer_name"]]
+                df_products = df_products[["item_code", "item_name", "chain_name", "sub_chain_name", "manufacturer_name", "relevance"]]
                 df_products["item_display"] = df_products.apply(lambda x: f"{x['item_name']} ({x['item_code']})", axis=1)
                 st.write("Search Results:")
                 selected_index = st.selectbox(
                     "Select a product to assign",
                     options=df_products.index,
-                    format_func=lambda x: f"{df_products.loc[x, 'item_display']} - {df_products.loc[x, 'chain_name']} - {df_products.loc[x, 'sub_chain_name']}"
+                    format_func=lambda x: f"{df_products.loc[x, 'item_display']} - {df_products.loc[x, 'chain_name']} - {df_products.loc[x, 'sub_chain_name']}",
+                    key='product_assign_selectbox'
                 )
-                # Update selection
-                item = products[selected_index]
-                sub_chain_id = item['sub_chain_id']
-                if sub_chain_id in st.session_state['selected_sub_chains']:
-                    st.warning(f"You have already selected a product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')}.")
-                else:
-                    st.session_state['selected_sub_chains'].add(sub_chain_id)
-                    st.session_state['excluded_sub_chains'].add(sub_chain_id)
-                    st.session_state['selected_items'][sub_chain_id] = item
-                    st.success(f"Product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')} added.")
+                if st.button("Assign Selected Product"):
+                    # Update selection
+                    item = products[selected_index]
+                    sub_chain_id = item['sub_chain_id']
+                    if sub_chain_id in st.session_state['selected_sub_chains']:
+                        st.warning(f"You have already selected a product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')}.")
+                    else:
+                        st.session_state['selected_sub_chains'].add(sub_chain_id)
+                        st.session_state['excluded_sub_chains'].add(sub_chain_id)
+                        st.session_state['selected_items'][sub_chain_id] = item
+                        st.success(f"Product from {sub_chain_dict.get(sub_chain_id, 'Unknown Chain')} added.")
             else:
                 st.write("No products found.")
         else:
@@ -342,6 +362,7 @@ def main():
 
         with st.form("remove_items_form"):
             st.write("Select items to remove:")
+            remove_sub_chains = []
             for sub_chain_id, item in st.session_state['selected_items'].items():
                 sub_chain_name = sub_chain_dict.get(sub_chain_id, chain_dict.get(sub_chain_id.split('-')[0], 'Unknown Chain'))
                 chain_barcodes[sub_chain_name] = item["item_code"]
@@ -351,22 +372,22 @@ def main():
                 with col2:
                     barcode_input = st.text_input(f"Item Barcode ({sub_chain_name})", value=str(item['item_code']), key=f"barcode_{sub_chain_id}")
                 with col3:
-                    st.checkbox("", key=f"remove_{sub_chain_id}")
+                    remove = st.checkbox("", key=f"remove_{sub_chain_id}")
+                    if remove:
+                        remove_sub_chains.append(sub_chain_id)
             submit_remove = st.form_submit_button("Remove Selected Items")
             if submit_remove:
-                sub_chains_to_remove = []
-                for sub_chain_id in list(st.session_state['selected_items'].keys()):
-                    if st.session_state.get(f"remove_{sub_chain_id}", False):
-                        sub_chains_to_remove.append(sub_chain_id)
-                for sub_chain_id in sub_chains_to_remove:
-                    st.session_state['selected_sub_chains'].remove(sub_chain_id)
-                    st.session_state['excluded_sub_chains'].remove(sub_chain_id)
-                    del st.session_state['selected_items'][sub_chain_id]
-                    del st.session_state[f"remove_{sub_chain_id}"]  # Remove the checkbox state
-                    del st.session_state[f"name_{sub_chain_id}"]    # Remove the name input state
-                    del st.session_state[f"barcode_{sub_chain_id}"] # Remove the barcode input state
-                if sub_chains_to_remove:
-                    st.success(f"Removed selected items.")
+                if remove_sub_chains:
+                    for sub_chain_id in remove_sub_chains:
+                        st.session_state['selected_sub_chains'].discard(sub_chain_id)
+                        st.session_state['excluded_sub_chains'].discard(sub_chain_id)
+                        st.session_state['selected_items'].pop(sub_chain_id, None)
+                        st.session_state.pop(f"remove_{sub_chain_id}", None)
+                        st.session_state.pop(f"name_{sub_chain_id}", None)
+                        st.session_state.pop(f"barcode_{sub_chain_id}", None)
+                    st.success("Selected items have been removed.")
+                else:
+                    st.warning("No items were selected for removal.")
 
         # Sub-Chains Status in Sidebar
         st.sidebar.header("Sub-Chains Status")
