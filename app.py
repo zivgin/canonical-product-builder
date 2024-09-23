@@ -146,6 +146,8 @@ def main():
         st.session_state['exclude_words_list'] = []
     if 'uploaded_products' not in st.session_state:
         st.session_state['uploaded_products'] = pd.DataFrame()
+    if 'selected_product_name' not in st.session_state:
+        st.session_state['selected_product_name'] = None
 
     # Tabs
     tab1, tab2 = st.tabs(["Build Canonical Product", "View Canonical Products"])
@@ -182,24 +184,43 @@ def main():
         if not st.session_state['uploaded_products'].empty:
             if 'Name' in st.session_state['uploaded_products'].columns:
                 product_names = st.session_state['uploaded_products']['Name'].dropna().unique().tolist()
-                selected_product_name = st.selectbox("Select Product", options=product_names)
-                selected_product = st.session_state['uploaded_products'][st.session_state['uploaded_products']['Name'] == selected_product_name].iloc[0]
-                name = selected_product_name
-                # Update canonical barcode if available
-                if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
-                    st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
-                    barcode_input = str(st.session_state["canonical_barcode"])
-                # Update category and sub-category if available
-                if 'Category' in selected_product and pd.notnull(selected_product['Category']):
-                    category_data = selected_product['Category']
-                    if '-' in category_data:
-                        category, sub_category = map(str.strip, category_data.split('-', 1))
+                selected_product_name = st.selectbox("Select Product", options=product_names, key='product_selectbox')
+
+                # Check if the selected product has changed
+                if st.session_state['selected_product_name'] != selected_product_name:
+                    # The product has changed, reset relevant session state variables
+                    st.session_state['selected_product_name'] = selected_product_name
+                    st.session_state['exclude_words_list'] = []
+                    st.session_state['selected_sub_chains'] = set()
+                    st.session_state['selected_items'] = {}
+                    st.session_state['excluded_sub_chains'] = set()
+
+                    selected_product = st.session_state['uploaded_products'][st.session_state['uploaded_products']['Name'] == selected_product_name].iloc[0]
+                    name = selected_product_name
+                    # Update canonical barcode if available
+                    if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
+                        st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
+                        barcode_input = str(st.session_state["canonical_barcode"])
                     else:
-                        category = category_data.strip()
+                        st.session_state["canonical_barcode"] = generate_canonical_barcode()
+                    # Update category and sub-category if available
+                    if 'Category' in selected_product and pd.notnull(selected_product['Category']):
+                        category_data = selected_product['Category']
+                        if '-' in category_data:
+                            category, sub_category = map(str.strip, category_data.split('-', 1))
+                        else:
+                            category = category_data.strip()
+                            sub_category = ''
+                    else:
+                        category = ''
                         sub_category = ''
+                    # Store category and sub-category in session state
+                    st.session_state['category'] = category
+                    st.session_state['sub_category'] = sub_category
                 else:
-                    category = ''
-                    sub_category = ''
+                    name = st.session_state['selected_product_name']
+                    category = st.session_state.get('category', '')
+                    sub_category = st.session_state.get('sub_category', '')
             else:
                 st.error("The uploaded Excel file must contain a 'Name' column.")
                 name = st.text_input("Product Name", value='')
@@ -214,13 +235,24 @@ def main():
         categories = get_categories()
         if category and category not in categories:
             categories = [category] + list(categories)
-        category = st.selectbox("Category", options=["Add new category"] + categories)
+        category_options = ["Add new category"] + categories
+        if category in categories:
+            category_index = category_options.index(category)
+        else:
+            category_index = 0  # "Add new category"
+        category = st.selectbox("Category", options=category_options, index=category_index, key='category_selectbox')
         if category == "Add new category":
             category = st.text_input("New Category", value='')
+
         sub_categories = get_sub_categories()
         if sub_category and sub_category not in sub_categories:
             sub_categories = [sub_category] + list(sub_categories)
-        sub_category = st.selectbox("Sub-Category", options=["Add new sub-category"] + sub_categories)
+        sub_category_options = ["Add new sub-category"] + sub_categories
+        if sub_category in sub_categories:
+            sub_category_index = sub_category_options.index(sub_category)
+        else:
+            sub_category_index = 0  # "Add new sub-category"
+        sub_category = st.selectbox("Sub-Category", options=sub_category_options, index=sub_category_index, key='sub_category_selectbox')
         if sub_category == "Add new sub-category":
             sub_category = st.text_input("New Sub-Category", value='')
 
@@ -245,12 +277,13 @@ def main():
         st.header("3. Search for Products")
 
         search_term = st.text_input("Search for products", value=name)
-        exclude_words_input = st.text_input("Exclude words from search (separate by commas)")
+        exclude_words_input = st.text_input("Exclude words from search (separate by commas)", key='exclude_words_input')
         if exclude_words_input:
             words = [word.strip() for word in exclude_words_input.split(',') if word.strip()]
             st.session_state['exclude_words_list'].extend(words)
             # Remove duplicates
             st.session_state['exclude_words_list'] = list(set(st.session_state['exclude_words_list']))
+            st.session_state['exclude_words_input'] = ''  # Clear the input field
         exclude_words = st.session_state['exclude_words_list']
         if exclude_words:
             st.write("Excluding words:", exclude_words)
@@ -292,27 +325,34 @@ def main():
         # Section 4: Selected Products from Sub-Chains
         st.header("4. Selected Products from Sub-Chains")
         chain_barcodes = {}
-        sub_chains_to_remove = []
-        st.write("Select items to remove:")
-        for sub_chain_id, item in st.session_state['selected_items'].items():
-            sub_chain_name = sub_chain_dict.get(sub_chain_id, chain_dict.get(sub_chain_id.split('-')[0], 'Unknown Chain'))
-            chain_barcodes[sub_chain_name] = item["item_code"]
-            col1, col2, col3 = st.columns([4, 4, 1])
-            with col1:
-                name_input = st.text_input(f"Item Name ({sub_chain_name})", value=item['item_name'], key=f"name_{sub_chain_id}")
-            with col2:
-                barcode_input = st.text_input(f"Item Barcode ({sub_chain_name})", value=str(item['item_code']), key=f"barcode_{sub_chain_id}")
-            with col3:
-                remove = st.checkbox("", key=f"remove_{sub_chain_id}")
-                if remove:
-                    sub_chains_to_remove.append(sub_chain_id)
-        if st.button("Remove Selected Items"):
-            for sub_chain_id in sub_chains_to_remove:
-                st.session_state['selected_sub_chains'].remove(sub_chain_id)
-                st.session_state['excluded_sub_chains'].remove(sub_chain_id)
-                del st.session_state['selected_items'][sub_chain_id]
-            if sub_chains_to_remove:
-                st.success(f"Removed selected items.")
+
+        with st.form("remove_items_form"):
+            st.write("Select items to remove:")
+            for sub_chain_id, item in st.session_state['selected_items'].items():
+                sub_chain_name = sub_chain_dict.get(sub_chain_id, chain_dict.get(sub_chain_id.split('-')[0], 'Unknown Chain'))
+                chain_barcodes[sub_chain_name] = item["item_code"]
+                col1, col2, col3 = st.columns([4, 4, 1])
+                with col1:
+                    name_input = st.text_input(f"Item Name ({sub_chain_name})", value=item['item_name'], key=f"name_{sub_chain_id}")
+                with col2:
+                    barcode_input = st.text_input(f"Item Barcode ({sub_chain_name})", value=str(item['item_code']), key=f"barcode_{sub_chain_id}")
+                with col3:
+                    st.checkbox("", key=f"remove_{sub_chain_id}")
+            submit_remove = st.form_submit_button("Remove Selected Items")
+            if submit_remove:
+                sub_chains_to_remove = []
+                for sub_chain_id in list(st.session_state['selected_items'].keys()):
+                    if st.session_state.get(f"remove_{sub_chain_id}", False):
+                        sub_chains_to_remove.append(sub_chain_id)
+                for sub_chain_id in sub_chains_to_remove:
+                    st.session_state['selected_sub_chains'].remove(sub_chain_id)
+                    st.session_state['excluded_sub_chains'].remove(sub_chain_id)
+                    del st.session_state['selected_items'][sub_chain_id]
+                    del st.session_state[f"remove_{sub_chain_id}"]  # Remove the checkbox state
+                    del st.session_state[f"name_{sub_chain_id}"]    # Remove the name input state
+                    del st.session_state[f"barcode_{sub_chain_id}"] # Remove the barcode input state
+                if sub_chains_to_remove:
+                    st.success(f"Removed selected items.")
 
         # Sub-Chains Status in Sidebar
         st.sidebar.header("Sub-Chains Status")
