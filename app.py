@@ -73,9 +73,13 @@ def search_products(search_term, excluded_sub_chains, exclude_words=[]):
     # Build regex pattern for exclude words
     exclude_pattern = '|'.join([re.escape(word) for word in exclude_words])
     # Query to search products
-    regex_query = {"$regex": search_term, "$options": "i"}
     if exclude_words:
-        regex_query = {"$regex": f"^(?!.*({exclude_pattern})).*{search_term}.*$", "$options": "i"}
+        regex_pattern = f"^(?!.*({exclude_pattern})).*{re.escape(search_term)}.*"
+    else:
+        regex_pattern = f".*{re.escape(search_term)}.*"
+
+    regex_query = {"$regex": regex_pattern, "$options": "i"}
+
     query = {"item_name": regex_query}
     projection = {
         "_id": 0,
@@ -148,6 +152,10 @@ def main():
         st.session_state['uploaded_products'] = pd.DataFrame()
     if 'selected_product_name' not in st.session_state:
         st.session_state['selected_product_name'] = None
+    if 'category' not in st.session_state:
+        st.session_state['category'] = ''
+    if 'sub_category' not in st.session_state:
+        st.session_state['sub_category'] = ''
 
     # Tabs
     tab1, tab2 = st.tabs(["Build Canonical Product", "View Canonical Products"])
@@ -161,6 +169,8 @@ def main():
                 if not df_excel.empty:
                     # Store the DataFrame in session state
                     st.session_state['uploaded_products'] = df_excel
+                    # Reset selected product name when new Excel file is uploaded
+                    st.session_state['selected_product_name'] = None
                 else:
                     st.error("Uploaded Excel file is empty.")
                     st.session_state['uploaded_products'] = pd.DataFrame()
@@ -173,13 +183,6 @@ def main():
         # Section 1: Create Canonical Product
         st.header("1. Create Canonical Product")
 
-        # Generate or input canonical barcode
-        barcode_input = st.text_input("Canonical Barcode", value=str(st.session_state["canonical_barcode"]))
-        if barcode_input.isdigit():
-            st.session_state["canonical_barcode"] = int(barcode_input)
-        else:
-            st.error("Canonical Barcode must be a number.")
-
         # Input name, category, and sub-category
         if not st.session_state['uploaded_products'].empty:
             if 'Name' in st.session_state['uploaded_products'].columns:
@@ -187,9 +190,9 @@ def main():
                 selected_product_name = st.selectbox("Select Product", options=product_names, key='product_selectbox')
 
                 # Check if the selected product has changed
-                if st.session_state['selected_product_name'] != selected_product_name:
+                if st.session_state.get('prev_selected_product_name') != selected_product_name:
                     # The product has changed, reset relevant session state variables
-                    st.session_state['selected_product_name'] = selected_product_name
+                    st.session_state['prev_selected_product_name'] = selected_product_name
                     st.session_state['exclude_words_list'] = []
                     st.session_state['selected_sub_chains'] = set()
                     st.session_state['selected_items'] = {}
@@ -200,7 +203,6 @@ def main():
                     # Update canonical barcode if available
                     if 'Barcode' in selected_product and pd.notnull(selected_product['Barcode']):
                         st.session_state["canonical_barcode"] = int(selected_product['Barcode'])
-                        barcode_input = str(st.session_state["canonical_barcode"])
                     else:
                         st.session_state["canonical_barcode"] = generate_canonical_barcode()
                     # Update category and sub-category if available
@@ -217,19 +219,28 @@ def main():
                     # Store category and sub-category in session state
                     st.session_state['category'] = category
                     st.session_state['sub_category'] = sub_category
+                    # Store product name in session state
+                    st.session_state['name'] = name
                 else:
-                    name = st.session_state['selected_product_name']
+                    name = st.session_state.get('name', '')
                     category = st.session_state.get('category', '')
                     sub_category = st.session_state.get('sub_category', '')
             else:
                 st.error("The uploaded Excel file must contain a 'Name' column.")
-                name = st.text_input("Product Name", value='')
+                name = st.text_input("Product Name", value='', key='product_name_input')
                 category = ''
                 sub_category = ''
         else:
-            name = st.text_input("Product Name", value='')
+            name = st.text_input("Product Name", value='', key='product_name_input')
             category = ''
             sub_category = ''
+
+        # Generate or input canonical barcode
+        barcode_input = st.text_input("Canonical Barcode", value=str(st.session_state["canonical_barcode"]), key='barcode_input')
+        if barcode_input.isdigit():
+            st.session_state["canonical_barcode"] = int(barcode_input)
+        else:
+            st.error("Canonical Barcode must be a number.")
 
         # Display category and sub-category fields
         categories = get_categories()
@@ -242,7 +253,8 @@ def main():
             category_index = 0  # "Add new category"
         category = st.selectbox("Category", options=category_options, index=category_index, key='category_selectbox')
         if category == "Add new category":
-            category = st.text_input("New Category", value='')
+            category = st.text_input("New Category", value='', key='new_category_input')
+        st.session_state['category'] = category
 
         sub_categories = get_sub_categories()
         if sub_category and sub_category not in sub_categories:
@@ -254,7 +266,8 @@ def main():
             sub_category_index = 0  # "Add new sub-category"
         sub_category = st.selectbox("Sub-Category", options=sub_category_options, index=sub_category_index, key='sub_category_selectbox')
         if sub_category == "Add new sub-category":
-            sub_category = st.text_input("New Sub-Category", value='')
+            sub_category = st.text_input("New Sub-Category", value='', key='new_sub_category_input')
+        st.session_state['sub_category'] = sub_category
 
         # Section 2: Auto-Suggestion for Matching Products
         st.header("2. Auto-Suggestion for Matching Products")
@@ -264,10 +277,11 @@ def main():
                 exact_matches = {}
                 for product in auto_products:
                     sub_chain_id = product['sub_chain_id']
-                    st.session_state['selected_sub_chains'].add(sub_chain_id)
-                    st.session_state['excluded_sub_chains'].add(sub_chain_id)
-                    st.session_state['selected_items'][sub_chain_id] = product
-                    exact_matches[sub_chain_id] = product
+                    if sub_chain_id not in st.session_state['selected_sub_chains']:
+                        st.session_state['selected_sub_chains'].add(sub_chain_id)
+                        st.session_state['excluded_sub_chains'].add(sub_chain_id)
+                        st.session_state['selected_items'][sub_chain_id] = product
+                        exact_matches[sub_chain_id] = product
                 if exact_matches:
                     st.write("Automatically assigned exact matches from other sub-chains.")
             else:
@@ -276,7 +290,7 @@ def main():
         # Section 3: Search for Products
         st.header("3. Search for Products")
 
-        search_term = st.text_input("Search for products", value=name)
+        search_term = st.text_input("Search for products", value=name, key='search_term_input')
         exclude_words_input = st.text_input("Exclude words from search (separate by commas)", key='exclude_words_input')
         if exclude_words_input:
             words = [word.strip() for word in exclude_words_input.split(',') if word.strip()]
@@ -399,6 +413,10 @@ def main():
                         st.session_state['selected_items'] = {}
                         st.session_state['excluded_sub_chains'] = set()
                         st.session_state['exclude_words_list'] = []
+                        st.session_state['selected_product_name'] = None
+                        st.session_state['name'] = ''
+                        st.session_state['category'] = ''
+                        st.session_state['sub_category'] = ''
                         st.experimental_rerun()
 
     with tab2:
